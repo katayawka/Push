@@ -1,0 +1,94 @@
+// server.js
+const express = require('express');
+const cors = require('cors');
+const app = express();
+const PORT = process.env.PORT || 5000;
+
+app.use(cors());
+app.use(express.json());
+
+// Хранение комнат в памяти (заменить на Redis/DB в проде)
+const rooms = {};
+
+// Вспомогательная функция: получение или создание комнаты
+function getOrCreateRoom(roomId) {
+  if (!rooms[roomId]) {
+    rooms[roomId] = {
+      teams: [], // [{ name, pressed: false, joinedAt }]
+      gameStarted: false,
+      pressedTeam: null, // имя команды, первой нажавшей
+    };
+  }
+  return rooms[roomId];
+}
+
+// Подключение команды
+app.post('/api/join', (req, res) => {
+  const { roomId, teamName } = req.body;
+  if (!roomId || !teamName) return res.status(400).json({ error: 'roomId и teamName обязательны' });
+
+  const room = getOrCreateRoom(roomId);
+  const alreadyJoined = room.teams.some(t => t.name === teamName);
+  if (alreadyJoined) return res.status(409).json({ error: 'Команда с таким названием уже подключена' });
+
+  room.teams.push({ name: teamName, pressed: false, joinedAt: Date.now() });
+  const isFirst = room.teams.length === 1;
+  res.json({ roomId, teamName, isFirst });
+});
+
+// Нажатие кнопки (включение)
+app.post('/api/press', (req, res) => {
+  const { roomId, teamName } = req.body;
+  const room = rooms[roomId];
+  if (!room) return res.status(404).json({ error: 'Комната не найдена' });
+
+  if (!room.gameStarted) return res.status(400).json({ error: 'Игра ещё не началась' });
+
+  // Если кто-то уже нажал — игнорируем
+  if (room.pressedTeam) return res.status(400).json({ error: 'Кто-то уже нажал!' });
+
+  const team = room.teams.find(t => t.name === teamName);
+  if (!team) return res.status(404).json({ error: 'Команда не найдена' });
+
+  team.pressed = true;
+  room.pressedTeam = teamName;
+
+  res.json({ success: true, pressedTeam: teamName });
+});
+
+// Начать игру (только первая команда)
+app.post('/api/start', (req, res) => {
+  const { roomId } = req.body;
+  const room = rooms[roomId];
+  if (!room) return res.status(404).json({ error: 'Комната не найдена' });
+
+  if (room.teams.length === 0) return res.status(400).json({ error: 'Нет подключённых команд' });
+
+  room.gameStarted = true;
+  room.pressedTeam = null;
+  room.teams.forEach(t => t.pressed = false);
+
+  res.json({ success: true });
+});
+
+// Получение состояния комнаты (для лендинга)
+app.get('/api/room/:roomId', (req, res) => {
+  const { roomId } = req.params;
+  const room = rooms[roomId] || { teams: [], gameStarted: false, pressedTeam: null };
+  res.json(room);
+});
+
+// Сброс состояния (для кнопки обновить)
+app.post('/api/reset', (req, res) => {
+  const { roomId } = req.body;
+  const room = rooms[roomId];
+  if (!room) return res.status(404).json({ error: 'Комната не найдена' });
+
+  room.pressedTeam = null;
+  room.teams.forEach(t => t.pressed = false);
+  res.json({ success: true });
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
